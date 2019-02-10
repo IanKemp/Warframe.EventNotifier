@@ -75,7 +75,7 @@ namespace Warframe.EventNotifier
                     Console.Clear();
 
                     WriteEvents(worldState.WS_Alerts, IsUsefulAlert, a => new TimedEvent<Alert>(a, worldState),
-                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, a => a.Event.Mission.IsNightmare ? ConsoleColor.Red : ConsoleColor.Gray, FormatAlert);
+                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, a => a.Event.Mission.IsNightmare || IsCriticallyImportantAlert(a.Event) ? ConsoleColor.Red : ConsoleColor.Gray, FormatAlert);
 
                     WriteEvents(worldState.WS_Invasions.Where(i => !i.IsCompleted), IsInterestingInvasion, i => new { Invasion = i, OrderedCompletion = Math.Min(i.Completion, 100 - i.Completion), },
                         null, "INVASIONS", i => i.OrderedCompletion, null, i => FormatInvasion(i.Invasion));
@@ -161,7 +161,12 @@ namespace Warframe.EventNotifier
 
         private static bool IsUsefulAlert(Alert alert)
         {
-            return HasAnyItems(alert.Mission.Reward) && !alert.Mission.Reward.Items.Any(i => i.EndsWith("Endo"));
+            return HasAnyItems(alert.Mission.Reward) && !alert.Mission.Reward.Items.Any(i => i.EndsWith("Endo") || i.EndsWith("Ferrite") || i.EndsWith("Rubedo"));
+        }
+
+        private static bool IsCriticallyImportantAlert(Alert alert)
+        {
+            return HasAnyItems(alert.Mission.Reward) && alert.Mission.Reward.Items.Any(i => i.Contains("Orokin Catalyst") || i.Contains("Orokin Reactor") || i.Contains("Riven"));
         }
 
         private static string FormatAlert(TimedEvent<Alert> alertEvent)
@@ -220,7 +225,8 @@ namespace Warframe.EventNotifier
 
         private static bool IsFarmableFissure(Fissure fissure)
         {
-            return fissure.MissionType == "Defense" || fissure.MissionType == "Excavation" || fissure.MissionType == "Interception" || fissure.MissionType == "Survival";
+            // removing defense for now since DE are a bunch of drunken monkeys
+            return /*fissure.MissionType == "Defense" ||*/ fissure.MissionType == "Excavation" || fissure.MissionType == "Interception" || fissure.MissionType == "Survival";
         }
 
         private static string FormatFissure(TimedEvent<Fissure> fissureEvent)
