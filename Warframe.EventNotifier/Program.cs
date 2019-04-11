@@ -13,11 +13,16 @@ namespace Warframe.EventNotifier
     {
         static async Task Main(string[] args)
         {
-            void WriteHeading(string heading, int shown, int total)
+            void WriteHeading(string heading)
             {
-                Console.WriteLine($"{heading} ({shown} of {total} shown)");
+                Console.WriteLine(heading);
                 Console.WriteLine(new string('=', 79));
                 Console.WriteLine();
+            }
+
+            void WriteCountedHeading(string heading, int shown, int total)
+            {
+                WriteHeading($"{heading} ({shown} of {total} shown)");
             }
 
             void WriteEvents<T, T2, T3>(IEnumerable<T> events, Func<T, bool> preFilter, Func<T, T2> transform, Func<T2, bool> postFilter, string heading, Func<T2, T3> orderBy, Func<T2, ConsoleColor> foregroundColour, Func<T2, string> writer)
@@ -29,7 +34,7 @@ namespace Warframe.EventNotifier
                     filteredEvents = filteredEvents.Where(postFilter);
                 }
 
-                WriteHeading(heading, filteredEvents.Count(), events.Count());
+                WriteCountedHeading(heading, filteredEvents.Count(), events.Count());
 
                 foreach (var filteredEvent in filteredEvents.OrderBy(orderBy))
                 {
@@ -74,13 +79,22 @@ namespace Warframe.EventNotifier
 
                     Console.Clear();
 
-                    WriteEvents(worldState.WS_Alerts, IsUsefulAlert, a => new TimedEvent<Alert>(a, worldState),
-                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, a => a.Event.Mission.IsNightmare || IsCriticallyImportantAlert(a.Event) ? ConsoleColor.Red : ConsoleColor.Gray, FormatAlert);
+                    WriteHeading("CYCLES");
 
-                    WriteEvents(worldState.WS_Invasions.Where(i => !i.IsCompleted), IsInterestingInvasion, i => new { Invasion = i, OrderedCompletion = Math.Min(i.Completion, 100 - i.Completion), },
-                        null, "INVASIONS", i => i.OrderedCompletion, null, i => FormatInvasion(i.Invasion));
+                    Console.WriteLine($"Earth: {(worldState.EarthCycle.IsDay ? "Night" : "Day")} in {worldState.EarthCycle.TimeRemaining}");
+                    Console.WriteLine($"Plains: {(worldState.CetusCycle.IsDay ? "Night" : "Day")} in {worldState.CetusCycle.TimeRemaining}");
+                    Console.WriteLine($"Vallis: {(worldState.VallisCycle.IsWarm ? "Cold" : "Warm")} in {worldState.VallisCycle.TimeRemaining}");
+                    Console.WriteLine();
 
-                    WriteEvents(worldState.WS_Fissures, IsFarmableFissure, f => new TimedEvent<Fissure>(f, worldState), null,
+                    WriteEvents(worldState.Alerts, IsUsefulAlert, a => new TimedEvent<Alert>(a, worldState),
+                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, a => a.Event.Mission.IsNightmare || IsAnyItemCriticallyImportant(a.Event.Mission.Reward) ? ConsoleColor.Red : ConsoleColor.Gray,
+                        FormatAlert);
+
+                    WriteEvents(worldState.Invasions.Where(i => !i.IsCompleted), IsInterestingInvasion, i => new { Invasion = i, OrderedCompletion = Math.Min(i.Completion, 100 - i.Completion), },
+                        null, "INVASIONS", i => i.OrderedCompletion, i => IsAnyItemCriticallyImportant(i.Invasion.AttackerReward) || IsAnyItemCriticallyImportant(i.Invasion.DefenderReward) ? ConsoleColor.Red : ConsoleColor.Gray,
+                        i => FormatInvasion(i.Invasion));
+
+                    WriteEvents(worldState.Fissures, IsFarmableFissure, f => new TimedEvent<Fissure>(f, worldState), null,
                         "FISSURES", f => f.TimeToExpiry, null, FormatFissure);
 
                     await Task.Delay(TimeSpan.FromMinutes(1), token.Token).ConfigureAwait(false);
@@ -161,12 +175,39 @@ namespace Warframe.EventNotifier
 
         private static bool IsUsefulAlert(Alert alert)
         {
-            return HasAnyItems(alert.Mission.Reward) && !alert.Mission.Reward.Items.Any(i => i.EndsWith("Endo") || i.EndsWith("Ferrite") || i.EndsWith("Rubedo"));
+            return HasAnyItems(alert.Mission.Reward)
+                && !alert.Mission.Reward.Items.Any(i => i.EndsWith("Endo", StringComparison.CurrentCultureIgnoreCase)
+                    || i.EndsWith("Ferrite", StringComparison.CurrentCultureIgnoreCase)
+                    || i.EndsWith("Rubedo", StringComparison.CurrentCultureIgnoreCase));
+        }
+
+        private static bool ContainsAny(IEnumerable<string> items, IEnumerable<string> values, StringComparison comparisonType = StringComparison.CurrentCulture)
+        {
+            foreach (var item in items)
+            {
+                foreach (var value in values)
+                {
+                    if (item.Contains(value, comparisonType))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsAnyItemCriticallyImportant(Reward reward)
+        {
+            var criticallyImportantItems = new[] { "Exilus Adapter", "Forma", "Orokin Catalyst", "Orokin Reactor", "Riven", };
+
+            return ContainsAny(reward.Items, criticallyImportantItems, StringComparison.CurrentCultureIgnoreCase)
+                || ContainsAny(reward.CountedItems.Select(ci => ci.Type), criticallyImportantItems, StringComparison.CurrentCultureIgnoreCase);
         }
 
         private static bool IsCriticallyImportantAlert(Alert alert)
         {
-            return HasAnyItems(alert.Mission.Reward) && alert.Mission.Reward.Items.Any(i => i.Contains("Orokin Catalyst") || i.Contains("Orokin Reactor") || i.Contains("Riven"));
+            return HasAnyItems(alert.Mission.Reward) && alert.Mission.Reward.Items.Any(i => i.Contains("Exilus Adapter") || i.Contains("Orokin Catalyst") || i.Contains("Orokin Reactor") || i.Contains("Riven"));
         }
 
         private static string FormatAlert(TimedEvent<Alert> alertEvent)
@@ -191,11 +232,18 @@ namespace Warframe.EventNotifier
         {
             bool IsCrappyReward(Reward reward)
             {
-                return reward.CountedItems.Any(i => /*i.Type == "Detonite Injector" ||*/ i.Type == "Fieldron" || /*i.Type == "Mutagen Mass" ||*/ i.Type == "Mutalist Alad V Nav Coordinate");
+                return reward.CountedItems.Any(i =>
+                       i.Type.Contains("Detonite Injector", StringComparison.CurrentCultureIgnoreCase)
+                    || i.Type.Contains("Fieldron", StringComparison.CurrentCultureIgnoreCase)
+                    || i.Type.Contains("Mutagen Mass", StringComparison.CurrentCultureIgnoreCase)
+                    || i.Type.Contains("Mutalist Alad V Nav Coordinate", StringComparison.CurrentCultureIgnoreCase)
+                );
             }
 
             // phorid assassinations are fastest
-            return (invasion.IsVsInfestation ? invasion.Description.Contains("Phorid") : true) && !IsCrappyReward(invasion.AttackerReward) && !IsCrappyReward(invasion.DefenderReward);
+            return (invasion.IsVsInfestation ? invasion.Description.Contains("Phorid", StringComparison.CurrentCultureIgnoreCase) : true)
+                && !IsCrappyReward(invasion.AttackerReward)
+                && !IsCrappyReward(invasion.DefenderReward);
         }
 
         private static string FormatInvasion(Invasion invasion)
@@ -226,7 +274,10 @@ namespace Warframe.EventNotifier
         private static bool IsFarmableFissure(Fissure fissure)
         {
             // removing defense for now since DE are a bunch of drunken monkeys
-            return /*fissure.MissionType == "Defense" ||*/ fissure.MissionType == "Excavation" || fissure.MissionType == "Interception" || fissure.MissionType == "Survival";
+            return /*fissure.MissionType == "Defense"
+                ||*/ fissure.MissionType == "Excavation"
+                || fissure.MissionType == "Interception"
+                || fissure.MissionType == "Survival";
         }
 
         private static string FormatFissure(TimedEvent<Fissure> fissureEvent)
