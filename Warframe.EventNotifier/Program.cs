@@ -34,6 +34,11 @@ namespace Warframe.EventNotifier
                     filteredEvents = filteredEvents.Where(postFilter);
                 }
 
+                if (!filteredEvents.Any())
+                {
+                    return;
+                }
+
                 WriteCountedHeading(heading, filteredEvents.Count(), events.Count());
 
                 foreach (var filteredEvent in filteredEvents.OrderBy(orderBy))
