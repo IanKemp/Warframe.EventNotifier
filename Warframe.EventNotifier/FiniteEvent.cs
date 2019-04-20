@@ -3,12 +3,12 @@ using WarframeNET;
 
 namespace Warframe.EventNotifier
 {
-    public class TimedEvent<T> where T : ITimedEvent
+    public class FiniteEvent<T> where T : IFiniteEvent
     {
         public T Event { get; }
         public TimeSpan TimeToExpiry { get; }
 
-        public TimedEvent(T @event, WorldState worldState)
+        public FiniteEvent(T @event, WorldState worldState)
         {
             Event = @event;
             TimeToExpiry = Event.EndTime - worldState.Timestamp;

@@ -25,7 +25,7 @@ namespace Warframe.EventNotifier
                 WriteHeading($"{heading} ({shown} of {total} shown)");
             }
 
-            void WriteEvents<T, T2, T3>(IEnumerable<T> events, Func<T, bool> preFilter, Func<T, T2> transform, Func<T2, bool> postFilter, string heading, Func<T2, T3> orderBy, Func<T2, ConsoleColor> foregroundColour, Func<T2, string> writer)
+            void WriteEvents<T, T2, T3>(IEnumerable<T> events, Func<T, bool> preFilter, Func<T, T2> transform, Func<T2, bool> postFilter, string heading, Func<T2, T3> orderBy, Func<T2, string> writer, Func<T2, bool> isCritical = null)
             {
                 var filteredEvents = events.Where(preFilter).Select(transform);
 
@@ -43,14 +43,14 @@ namespace Warframe.EventNotifier
 
                 foreach (var filteredEvent in filteredEvents.OrderBy(orderBy))
                 {
-                    if (foregroundColour != null)
+                    if (isCritical != null)
                     {
-                        Console.ForegroundColor = foregroundColour(filteredEvent);
+                        Console.ForegroundColor = isCritical(filteredEvent) ? ConsoleColor.Red : ConsoleColor.Gray;
                     }
 
                     Console.WriteLine(writer(filteredEvent));
 
-                    if (foregroundColour != null)
+                    if (isCritical != null)
                     {
                         Console.ResetColor();
                     }
@@ -91,16 +91,19 @@ namespace Warframe.EventNotifier
                     Console.WriteLine($"Vallis: {(worldState.VallisCycle.IsWarm ? "Cold" : "Warm")} in {worldState.VallisCycle.TimeRemaining}");
                     Console.WriteLine();
 
-                    WriteEvents(worldState.Alerts, IsUsefulAlert, a => new TimedEvent<Alert>(a, worldState),
-                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, a => a.Event.Mission.IsNightmare || IsAnyItemCriticallyImportant(a.Event.Mission.Reward) ? ConsoleColor.Red : ConsoleColor.Gray,
-                        FormatAlert);
+                    WriteEvents(worldState.Events, _ => true, e => new FiniteEvent<Event>(e, worldState),
+                        e => e.TimeToExpiry > TimeSpan.Zero, "EVENTS", e => e.TimeToExpiry, FormatEvent);
+
+                    WriteEvents(worldState.Alerts, IsUsefulAlert, a => new FiniteEvent<Alert>(a, worldState),
+                        a => a.TimeToExpiry > TimeSpan.Zero, "ALERTS", a => a.TimeToExpiry, FormatAlert,
+                        a => a.Event.Mission.IsNightmare || IsAnyItemCriticallyImportant(a.Event.Mission.Reward));
 
                     WriteEvents(worldState.Invasions.Where(i => !i.IsCompleted), IsInterestingInvasion, i => new { Invasion = i, OrderedCompletion = Math.Min(i.Completion, 100 - i.Completion), },
-                        null, "INVASIONS", i => i.OrderedCompletion, i => IsAnyItemCriticallyImportant(i.Invasion.AttackerReward) || IsAnyItemCriticallyImportant(i.Invasion.DefenderReward) ? ConsoleColor.Red : ConsoleColor.Gray,
-                        i => FormatInvasion(i.Invasion));
+                        null, "INVASIONS", i => i.OrderedCompletion, i => FormatInvasion(i.Invasion),
+                        i => IsAnyItemCriticallyImportant(i.Invasion.AttackerReward) || IsAnyItemCriticallyImportant(i.Invasion.DefenderReward));
 
-                    WriteEvents(worldState.Fissures, IsFarmableFissure, f => new TimedEvent<Fissure>(f, worldState), null,
-                        "FISSURES", f => f.TimeToExpiry, null, FormatFissure);
+                    WriteEvents(worldState.Fissures, IsFarmableFissure, f => new FiniteEvent<Fissure>(f, worldState), null,
+                        "FISSURES", f => f.TimeToExpiry, FormatFissure);
 
                     await Task.Delay(TimeSpan.FromMinutes(1), token.Token).ConfigureAwait(false);
 
@@ -210,12 +213,17 @@ namespace Warframe.EventNotifier
                 || ContainsAny(reward.CountedItems.Select(ci => ci.Type), criticallyImportantItems, StringComparison.CurrentCultureIgnoreCase);
         }
 
-        private static bool IsCriticallyImportantAlert(Alert alert)
+        private static string FormatPercentage(float percent) => $"{Math.Round(percent, 0),3}%";
+
+        private static string FormatEvent(FiniteEvent<Event> @event)
         {
-            return HasAnyItems(alert.Mission.Reward) && alert.Mission.Reward.Items.Any(i => i.Contains("Exilus Adapter") || i.Contains("Orokin Catalyst") || i.Contains("Orokin Reactor") || i.Contains("Riven"));
+            return $"> {FormatPercentage(@event.Event.PercentageRemaining)} | {@event.Event.Description}"
+                + (!string.IsNullOrWhiteSpace(@event.Event.Tooltip) ? ": " + @event.Event.Tooltip : string.Empty)
+                + (!string.IsNullOrWhiteSpace(@event.Event.Faction) ? " (" + @event.Event.Faction + ")" : string.Empty)
+                + (!string.IsNullOrWhiteSpace(@event.Event.VictimNode) ? " @ " + @event.Event.VictimNode : string.Empty);
         }
 
-        private static string FormatAlert(TimedEvent<Alert> alertEvent)
+        private static string FormatAlert(FiniteEvent<Alert> alertEvent)
         {
             var alert = alertEvent.Event;
 
@@ -273,19 +281,20 @@ namespace Warframe.EventNotifier
                 attackerReward = FormatFaction(true) + " vs ";
             }
 
-            return $"> {Math.Round(invasion.Completion, 0),3}% | {attackerReward}{FormatFaction(false)} | {invasion.Node}";
+            return $"> {FormatPercentage(invasion.Completion)} | {attackerReward}{FormatFaction(false)} | {invasion.Node}";
         }
 
         private static bool IsFarmableFissure(Fissure fissure)
         {
-            // removing defense for now since DE are a bunch of drunken monkeys
+            // removing defense for now since DE are a bunch of drunken monkeys who can't write code to
+            // prevent enemies from teleporting inside walls, which makes the level un-completable
             return /*fissure.MissionType == "Defense"
                 ||*/ fissure.MissionType == "Excavation"
                 || fissure.MissionType == "Interception"
                 || fissure.MissionType == "Survival";
         }
 
-        private static string FormatFissure(TimedEvent<Fissure> fissureEvent)
+        private static string FormatFissure(FiniteEvent<Fissure> fissureEvent)
         {
             var fissure = fissureEvent.Event;
 
