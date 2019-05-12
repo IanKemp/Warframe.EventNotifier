@@ -13,16 +13,9 @@ namespace Warframe.EventNotifier
     {
         static async Task Main(string[] args)
         {
-            void WriteHeading(string heading)
-            {
-                Console.WriteLine(heading);
-                Console.WriteLine(new string('=', 79));
-                Console.WriteLine();
-            }
-
             void WriteCountedHeading(string heading, int shown, int total)
             {
-                WriteHeading($"{heading} ({shown} of {total} shown)");
+                WriteHeading(heading + (shown == total ? string.Empty : $" ({shown} of {total} shown)"));
             }
 
             void WriteEvents<T, T2, T3>(IEnumerable<T> events, Func<T, bool> preFilter, Func<T, T2> transform, Func<T2, bool> postFilter, string heading, Func<T2, T3> orderBy, Func<T2, string> writer, Func<T2, bool> isCritical = null)
@@ -84,12 +77,19 @@ namespace Warframe.EventNotifier
 
                     Console.Clear();
 
-                    WriteHeading("CYCLES");
+                    WriteHeading($"Earth: {(worldState.EarthCycle.IsDay ? "Night" : "Day")} in {worldState.EarthCycle.TimeRemaining} | "
+                        + $"Plains: {(worldState.CetusCycle.IsDay ? "Night" : "Day")} in {worldState.CetusCycle.TimeRemaining} | "
+                        + $"Vallis: {(worldState.VallisCycle.IsWarm ? "Cold" : "Warm")} in {worldState.VallisCycle.TimeRemaining}");
 
-                    Console.WriteLine($"Earth: {(worldState.EarthCycle.IsDay ? "Night" : "Day")} in {worldState.EarthCycle.TimeRemaining}");
-                    Console.WriteLine($"Plains: {(worldState.CetusCycle.IsDay ? "Night" : "Day")} in {worldState.CetusCycle.TimeRemaining}");
-                    Console.WriteLine($"Vallis: {(worldState.VallisCycle.IsWarm ? "Cold" : "Warm")} in {worldState.VallisCycle.TimeRemaining}");
-                    Console.WriteLine();
+                    if (worldState.VoidTrader != null)
+                    {
+                        WriteVoidTrader(new FiniteEvent<VoidTrader>(worldState.VoidTrader, worldState));
+                    }
+
+                    if (worldState.Nightwave != null)
+                    {
+                        WriteNightwave(new FiniteEvent<Nightwave>(worldState.Nightwave, worldState));
+                    }
 
                     WriteEvents(worldState.Events, _ => true, e => new FiniteEvent<Event>(e, worldState),
                         e => e.TimeToExpiry > TimeSpan.Zero, "EVENTS", e => e.TimeToExpiry, FormatEvent);
@@ -125,21 +125,56 @@ namespace Warframe.EventNotifier
             }
         }
 
+        private static void WriteHeading(string heading)
+        {
+            Console.WriteLine(heading);
+            Console.WriteLine(new string('=', 79));
+            Console.WriteLine();
+        }
+
+        private static void WriteVoidTrader(FiniteEvent<VoidTrader> baro)
+        {
+            var primedItems = baro.Event.Inventory.Where(i => i.Item.StartsWith("Primed", StringComparison.CurrentCultureIgnoreCase));
+
+            if (!primedItems.Any())
+            {
+                return;
+            }
+
+            WriteHeading($"VOID TRADER @ {baro.Event.Location} - {FormatDuration(baro.TimeToExpiry)}");
+
+            Console.WriteLine("> " + string.Join(", ", primedItems.Select(i => $"{i.Item} @ {i.Ducats} / {i.Credits}")));
+        }
+
+        private static void WriteNightwave(FiniteEvent<Nightwave> nightwave)
+        {
+            WriteHeading($"NIGHTWAVE - {FormatDuration(nightwave.TimeToExpiry)}");
+        }
+
         private static string FormatDuration(TimeSpan duration)
         {
             string durationDesc;
 
-            if (duration.TotalMinutes <= 0)
+            if (duration.TotalDays >= 1)
             {
-                durationDesc = (int)duration.TotalSeconds + "s";
+                durationDesc = $"{(int)duration.TotalDays}d {(int)duration.TotalHours - ((int)duration.TotalDays * 24)}h";
             }
             else if (duration.TotalHours >= 1)
             {
-                durationDesc = (int)duration.TotalHours + "h " + ((int)duration.TotalMinutes - ((int)duration.TotalHours * 60)) + "m";
+                durationDesc = $"{(int)duration.TotalHours}h {(int)duration.TotalMinutes - ((int)duration.TotalHours * 60)}m";
+            }
+            else if (duration.TotalMinutes >= 0)
+            {
+                durationDesc = $"{(int)duration.TotalMinutes}m {(int)duration.TotalSeconds - ((int)duration.TotalMinutes * 60)}s";
+                //durationDesc = $"{(int)duration.TotalMinutes}m";
+            }
+            else if (duration.TotalMinutes < 0)
+            {
+                durationDesc = $"{(int)duration.TotalSeconds}s";
             }
             else
             {
-                durationDesc = (int)duration.TotalMinutes + "m";
+                durationDesc = duration.ToString();
             }
 
             return durationDesc;
@@ -217,7 +252,7 @@ namespace Warframe.EventNotifier
 
         private static string FormatEvent(FiniteEvent<Event> @event)
         {
-            return $"> {FormatPercentage(@event.Event.PercentageRemaining)} | {@event.Event.Description}"
+            return $"> {Math.Round(@event.Event.PercentageRemaining, 2),5}% | {@event.Event.Description}"
                 + (!string.IsNullOrWhiteSpace(@event.Event.Tooltip) ? ": " + @event.Event.Tooltip : string.Empty)
                 + (!string.IsNullOrWhiteSpace(@event.Event.Faction) ? " (" + @event.Event.Faction + ")" : string.Empty)
                 + (!string.IsNullOrWhiteSpace(@event.Event.VictimNode) ? " @ " + @event.Event.VictimNode : string.Empty);
@@ -248,7 +283,7 @@ namespace Warframe.EventNotifier
                 return reward.CountedItems.Any(i =>
                        i.Type.Contains("Detonite Injector", StringComparison.CurrentCultureIgnoreCase)
                     || i.Type.Contains("Fieldron", StringComparison.CurrentCultureIgnoreCase)
-                    || i.Type.Contains("Mutagen Mass", StringComparison.CurrentCultureIgnoreCase)
+                    //|| i.Type.Contains("Mutagen Mass", StringComparison.CurrentCultureIgnoreCase)
                     || i.Type.Contains("Mutalist Alad V Nav Coordinate", StringComparison.CurrentCultureIgnoreCase)
                 );
             }
@@ -286,6 +321,13 @@ namespace Warframe.EventNotifier
 
         private static bool IsFarmableFissure(Fissure fissure)
         {
+            if (fissure.Tier == "Lith"
+                && (fissure.MissionType == "Crossfire"
+                    || fissure.MissionType == "Extermination"))
+            {
+                return true;
+            }
+
             // removing defense for now since DE are a bunch of drunken monkeys who can't write code to
             // prevent enemies from teleporting inside walls, which makes the level un-completable
             return /*fissure.MissionType == "Defense"
